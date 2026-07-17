@@ -1,0 +1,34 @@
+spec_version: 2
+description: 'Creates a simple AWS S3 bucket using the Terraform module in the connected repository'
+metadata:
+  display-name: 'Simple S3 Bucket'
+  self-service: false
+inputs:
+  agent:
+    type: agent
+    description: 'Agent used for deployment'
+  bucket_prefix:
+    type: 'string'
+    default: 'stackauto-demo'
+    description: 'Prefix used to generate a globally unique S3 bucket name'
+outputs:
+  bucket_name:
+    quick: false
+    value: '{{ .grains.bucket.outputs.bucket_name }}'
+  bucket_arn:
+    quick: false
+    value: '{{ .grains.bucket.outputs.bucket_arn }}'
+grains:
+  bucket:
+    kind: terraform
+    spec:
+      source:
+        store: stackautomation
+        path: terraform/s3-bucket
+      agent:
+        name: '{{ .inputs.agent }}'
+      inputs:
+        - bucket_prefix: '{{ .inputs.bucket_prefix }}'
+      outputs:
+        - bucket_name
+        - bucket_arn

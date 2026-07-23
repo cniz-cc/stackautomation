@@ -1,0 +1,155 @@
+spec_version: 2
+description: >
+  Provisions an Ubuntu virtual machine on VMware vSphere, then installs nginx
+  on top of it serving a page that says "hello from stack automation".
+
+metadata:
+  display-name: "Ubuntu-VM"
+  self-service: true
+
+inputs:
+  agent:
+    type: agent
+
+  # -- vSphere placement --
+  vsphere_datacenter:
+    type: string
+    description: "Name of the vSphere datacenter to deploy into."
+  vsphere_cluster:
+    type: string
+    description: "Name of the vSphere compute cluster to deploy into."
+  vsphere_datastore:
+    type: string
+    description: "Name of the vSphere datastore to place the VM's disks on."
+  vsphere_network:
+    type: string
+    description: "Name of the vSphere network/port group to attach the VM's NIC to."
+  vsphere_template:
+    type: string
+    description: "Name of the existing Ubuntu VM template to clone."
+
+  # -- VM sizing --
+  vm_name:
+    type: string
+    default: "ubuntu-vm"
+    description: "Base name for the VM (namespaced with the environment id)."
+  num_cpus:
+    type: string
+    default: "2"
+    description: "Number of vCPUs."
+  memory:
+    type: string
+    default: "4096"
+    description: "RAM in MB."
+  disk_size_gb:
+    type: string
+    default: "20"
+    description: "Primary disk size in GB."
+
+  # -- guest access, for the nginx configuration step --
+  ssh_user:
+    type: string
+    default: "ubuntu"
+    description: "SSH user Ansible uses to configure the VM."
+  ssh_password:
+    type: string
+    sensitive: true
+    description: "SSH password for ssh_user (used to install and configure nginx)."
+
+  # -- nginx page --
+  greeting_message:
+    type: string
+    default: "hello from stack automation"
+    description: "Text served on the nginx index page."
+  http_port:
+    type: string
+    default: "80"
+    description: "Port nginx listens on."
+
+outputs:
+  vm_ip:
+    value: '{{ .grains.ubuntu_vm.outputs.ip_address }}'
+  web_url:
+    value: '{{ .grains.nginx_hello.outputs.web_url }}'
+    kind: link
+
+customization:
+  launch-form:
+    categories:
+      - name: "vSphere placement"
+        inputs:
+          - name: agent
+          - name: vsphere_datacenter
+          - name: vsphere_cluster
+          - name: vsphere_datastore
+          - name: vsphere_network
+          - name: vsphere_template
+      - name: "VM sizing"
+        inputs:
+          - name: vm_name
+          - name: num_cpus
+          - name: memory
+          - name: disk_size_gb
+      - name: "Access"
+        inputs:
+          - name: ssh_user
+          - name: ssh_password
+      - name: "Web page"
+        inputs:
+          - name: greeting_message
+          - name: http_port
+
+grains:
+  ubuntu_vm:
+    kind: terraform
+    spec:
+      source:
+        store: stackautomation   # TODO: confirm this matches the repo name registered in Torque (Settings > Integrations > Repositories)
+        path: terraform/vmware-ubuntu-vm
+        branch: workbench
+      agent:
+        name: '{{ .inputs.agent }}'
+      inputs:
+        - env_id: '{{ envId | downcase }}'
+        - vm_name: '{{ .inputs.vm_name }}'
+        - datacenter: '{{ .inputs.vsphere_datacenter }}'
+        - cluster: '{{ .inputs.vsphere_cluster }}'
+        - datastore: '{{ .inputs.vsphere_datastore }}'
+        - network: '{{ .inputs.vsphere_network }}'
+        - template_name: '{{ .inputs.vsphere_template }}'
+        - num_cpus: '{{ .inputs.num_cpus }}'
+        - memory: '{{ .inputs.memory }}'
+        - disk_size_gb: '{{ .inputs.disk_size_gb }}'
+      outputs:
+        - vm_id
+        - vm_name
+        - ip_address
+
+  nginx_hello:
+    depends-on: ubuntu_vm
+    kind: ansible
+    spec:
+      source:
+        store: stackautomation   # TODO: confirm this matches the repo name registered in Torque
+        path: ansible/nginx-hello/playbook.yaml
+        branch: workbench
+      agent:
+        name: '{{ .inputs.agent }}'
+      env-vars:
+        - ANSIBLE_HOST_KEY_CHECKING: 'False'
+      inventory-file:
+        web_servers:
+          hosts:
+            ubuntu-vm:
+              ansible_host: '{{ .grains.ubuntu_vm.outputs.ip_address }}'
+          vars:
+            ansible_user: '{{ .inputs.ssh_user }}'
+            ansible_password: '{{ .inputs.ssh_password }}'
+            ansible_become: true
+            ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+      inputs:
+        - greeting_message: '{{ .inputs.greeting_message }}'
+        - http_port: '{{ .inputs.http_port }}'
+      outputs:
+        - web_url
+        - deploy_status

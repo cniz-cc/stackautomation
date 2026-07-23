@@ -1,0 +1,84 @@
+---
+# ansible/nginx-hello/playbook.yaml
+#
+# Expected host groups: web_servers (or override via 'target_group')
+# Required inventory vars: ansible_host, ansible_user, ansible_become
+# Optional inventory vars: ansible_ssh_private_key_file
+#
+# Grain inputs (extra-vars):
+#   greeting_message  (default: 'hello from stack automation')  - Text served on the index page
+#   http_port         (default: 80)                             - Port nginx listens on
+#
+# Outputs:
+#   web_url        - URL of the running nginx site
+#   deploy_status  - 'success' or 'failed'
+
+- name: "Install and configure nginx"
+  hosts: "{{ target_group | default('web_servers') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    message: "{{ greeting_message | default('hello from stack automation') }}"
+    port: "{{ http_port | default(80) }}"
+
+  tasks:
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: true
+      tags: [nginx, install]
+
+    - name: Set nginx listen port
+      lineinfile:
+        path: /etc/nginx/sites-available/default
+        regexp: '^\s*listen\s+80'
+        line: "    listen {{ port }} default_server;"
+      when: port != 80
+      notify: restart nginx
+      tags: [nginx, configure]
+
+    - name: Deploy index page
+      copy:
+        dest: /var/www/html/index.html
+        content: "{{ message }}\n"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      notify: restart nginx
+      tags: [nginx, configure]
+
+    - name: Ensure nginx is running and enabled
+      service:
+        name: nginx
+        state: started
+        enabled: true
+      tags: [nginx, configure]
+
+    - name: Verify the site is serving the expected message
+      uri:
+        url: "http://localhost:{{ port }}/"
+        return_content: true
+        status_code: 200
+      register: site_check
+      retries: 5
+      delay: 3
+      until: site_check.status == 200
+      tags: [validate]
+
+    - name: Export outputs to Torque
+      torque.collections.export_torque_outputs:
+        outputs:
+          web_url: "http://{{ ansible_host }}:{{ port }}/"
+          deploy_status: "{{ 'success' if site_check.status == 200 else 'failed' }}"
+      delegate_to: localhost
+      run_once: true
+      tags: always
+      ignore_errors: true
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
